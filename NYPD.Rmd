@@ -1,0 +1,154 @@
+---
+title: "Analysis of NYPD Shooting Incident Data"
+author: "Melody Cefalo"
+date: "2024-03-03"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(magrittr)
+library(dplyr)
+library(ggplot2)
+library(lubridate)
+library(ggpubr)
+library(data.table)
+```
+
+## Description of Dataset
+
+"This is a breakdown of every shooting incident that occurred in NYC going back to 2006 through the end of the previous calendar year. This data is manually extracted every quarter and reviewed by the Office of Management Analysis and Planning before being posted on the NYPD website. Each record represents a shooting incident in NYC and includes information about the event, the location and time of occurrence. In addition, information related to suspect and victim demographics is also included. This data can be used by the public to explore the nature of shooting/criminal activity."
+
+## Load and Clean Data
+
+```{r test, echo=TRUE}
+filename<-'https://data.cityofnewyork.us/api/views/833y-fsy8/rows.csv?accessType=DOWNLOAD'
+data<-read.csv(filename, header=TRUE)
+```
+
+Now that the data loaded, check the column names as we will remove the ones not interesting for this project. 
+
+```{r columns, echo=TRUE}
+
+colnames(data)
+```
+
+Remove the columns with lat/long and x/y coordinates. 
+
+```{r remove, echo=TRUE}
+data = subset(data, select = -c(Latitude, Longitude, Lon_Lat, X_COORD_CD, Y_COORD_CD))
+```
+
+Check out the summary of the columns remaining. 
+``` {r get_types, echo=TRUE}
+summary(data)
+```
+Convert the occur_date column to date type, and the occur_time to a time. 
+Precinct and Jurisdiction_code should be characters, since they are not actually numbers, but nominal categorical data. Incident_key should also be a character, since it's just an ID and doesn't contain any data other than that. 
+
+``` {r change_date, echo=TRUE}
+
+data$OCCUR_DATE <-mdy(data$OCCUR_DATE)
+data$OCCUR_TIME <-strptime(paste(data$OCCUR_TIME, sep=" "),"%T")
+data$PRECINCT <- as.character(data$PRECINCT)
+data$JURISDICTION_CODE <- as.character(data$JURISDICTION_CODE)
+data$INCIDENT_KEY <- as.character(data$INCIDENT_KEY)
+
+```
+
+## Visualize Data
+
+1. Beginning the analysis, let's get an overall total by borough. 
+
+``` {r gb_boro1, echo=TRUE}
+data_by_boro <- data %>% 
+  group_by(BORO) %>%
+  summarize(SHOOTINGS_ALL_TIME=n()) %>%
+              select("BORO", "SHOOTINGS_ALL_TIME") %>%
+  ungroup()
+data_by_boro
+```
+
+
+3. Let's get an overall total by precinct, too. 
+
+```{r gb_precinct, echo=TRUE}
+overall_precinct <- data %>%
+  group_by(PRECINCT) %>%
+  summarize(SHOOTINGS_PER_PRECINCT=n()) %>%
+  select("PRECINCT", "SHOOTINGS_PER_PRECINCT") %>%
+  ungroup()
+overall_precinct
+```
+
+4. Finally let's look at the total number of shootings per day. 
+
+```{r per_day, echo=TRUE}
+overall_day <- data %>%
+  group_by(OCCUR_DATE) %>%
+  summarize(SHOOTINGS_PER_DATE=n()) %>%
+  select("OCCUR_DATE", "SHOOTINGS_PER_DATE") %>%
+  ungroup()
+setDT(overall_day)[OCCUR_DATE %between% c('2021-01-01', '2023-01-01')]
+head(overall_day)
+```
+
+
+## Data Analysis
+I'd like to pull in some population data to look at shootings per capita. I used the report at <https://www.nyc.gov/assets/planning/download/pdf/planning-level/nyc-population/projections_report_2010_2040.pdf> to find that the the population is not laid out year by year in each borough, but is labeled for 2020, which is the approximate median date of the shooting data. Moreover, the boroughs seem to be growing in population at approximately the same rate, so it should be an equivalent approximation for each borough. 
+
+```{r add_pop, echo=TRUE}
+new <-  c(1446788, 2648452, 1638281, 2330295, 487155)
+data_by_boro$POPULATION <- new
+data_by_boro
+```
+
+Now that we have the population, let's create a column for the shootings per thousand population. 
+
+```{r per_cap, echo=TRUE}
+fun1 <- function(x,y) (x/y)*1000
+data_by_boro$PER_THOUSAND <- mapply(fun1, data_by_boro$SHOOTINGS_ALL_TIME, data_by_boro$POPULATION)
+data_by_boro
+```
+
+As you can see, the per thousand shooting rate is much higher in the Bronx than other boroughs, with Queens being the lowest shooting frequency per thousand. 
+
+Another aspect I'm interested in, is looking at the overall shootings per day of the year. Let's look at this for just the last two years so that the chart is readable. 
+
+``` {r filter_day, echo=TRUE}
+setDT(overall_day)[OCCUR_DATE %between% c('2021-01-01', '2023-01-01')]
+ggplot(overall_day, aes(x=OCCUR_DATE, y=SHOOTINGS_PER_DATE)) + geom_line()
+
+```
+
+This plot is interesting. There seems to be a post-covid spike, which I've heard about in the news, but also a very steady pattern of spikes based on days of the week. 
+
+Is there a way I can apply days of the week to these dates and group by that? 
+
+``` {r weekday, echo=TRUE}
+overall_day$WEEKDAY <- weekdays(overall_day$OCCUR_DATE)
+shootings_by_weekday <- overall_day %>%
+  group_by(WEEKDAY) %>%
+  summarize(SHOOTINGS = n()) %>%
+  select(WEEKDAY, SHOOTINGS) %>%
+  ungroup()
+
+ggplot(shootings_by_weekday, aes(x=WEEKDAY, y=SHOOTINGS)) + geom_point()
+```
+
+
+Unexpectedly, the low point of the week is Thursday. I would have expected it to be Monday or Tuesday after the excitement of the weekend. But perhaps this is the day that most police officers have off? There is further investigation to do on this subject. 
+
+
+## Bias
+
+I am aware that I have substantial bias when considering shootings carried out by police officers in NYC. I associate a lot of negative emotions with police officers in general and have the perception that they abuse their power. I see that the Bronx has the highest per capita shooting. The Bronx is also the poorest county in NYC while the borough with the lowest office-involved shooting is the richest, Queens. I realize there are a lot more factors that go into this, and if I were to continue this investigation I would have to be very careful with my implicit and explicit biases. 
+
+
+
+```{r session, echo=FALSE}
+sessionInfo()
+```
+
+
+
